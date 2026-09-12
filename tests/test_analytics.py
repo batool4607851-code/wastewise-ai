@@ -358,7 +358,7 @@ def test_anomaly_detection_flags_high_observation():
         anomalies["row_index"] == 3
     ].iloc[0]
 
-    assert high_row["is_anomaly"] is True
+    assert bool(high_row["is_anomaly"]) is True
     assert high_row["z_score"] is not None
     assert high_row["z_score"] > 2.0
 
