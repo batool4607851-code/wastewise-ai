@@ -533,7 +533,7 @@ def detect_anomalies(
                 "historical_mean": historical_mean,
                 "historical_std": historical_std,
                 "z_score": z_score,
-                "is_anomaly": is_anomaly,
+                "is_anomaly": bool(is_anomaly),
                 "explanation": explanation,
             }
         )
