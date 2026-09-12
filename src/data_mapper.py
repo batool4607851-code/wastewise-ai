@@ -13,10 +13,6 @@ from .utils import (
 )
 
 
-# ---------------------------------------------------------------------------
-# Canonical internal schema
-# ---------------------------------------------------------------------------
-
 CANONICAL_FIELDS = [
     "date",
     "product",
@@ -78,10 +74,6 @@ STRING_CANONICAL_FIELDS = {
     "quality_status",
 }
 
-
-# ---------------------------------------------------------------------------
-# Dynamic source-column aliases
-# ---------------------------------------------------------------------------
 
 ALIASES: Dict[str, List[str]] = {
     "date": [
@@ -243,10 +235,6 @@ ALIASES: Dict[str, List[str]] = {
 }
 
 
-# ---------------------------------------------------------------------------
-# Result models
-# ---------------------------------------------------------------------------
-
 @dataclass
 class MappingCandidate:
     canonical_field: str
@@ -267,20 +255,7 @@ class MappingResult:
     conversion_warnings: List[str] = field(default_factory=list)
 
 
-# ---------------------------------------------------------------------------
-# Warning helpers
-# ---------------------------------------------------------------------------
-
 def _normalization_warnings(value: Any) -> List[str]:
-    """
-    Normalize warning metadata returned by utility conversion functions.
-
-    Depending on the utility implementation, warning information may be:
-    - None
-    - an integer count
-    - a string
-    - an iterable of warning messages
-    """
     if value is None:
         return []
 
@@ -298,22 +273,10 @@ def _normalization_warnings(value: Any) -> List[str]:
         return [str(value)]
 
 
-# ---------------------------------------------------------------------------
-# Candidate scoring
-# ---------------------------------------------------------------------------
-
 def _candidate_score(
     source_column: str,
     canonical_field: str,
 ) -> Tuple[int, str]:
-    """
-    Return a conservative confidence score for a source-to-canonical match.
-
-    100 = exact canonical field name
-    95  = known alias
-    70  = canonical tokens contained in source name
-    0   = no meaningful match
-    """
     source_normalized = normalize_column_name(source_column)
     canonical_normalized = normalize_column_name(canonical_field)
 
@@ -322,8 +285,12 @@ def _candidate_score(
         for alias in ALIASES.get(canonical_field, [])
     }
 
+    # Exact canonical names and known aliases intentionally receive
+    # the same score. This is important because a source file containing
+    # both "Production Quantity" and "Production Qty" must be flagged
+    # as ambiguous rather than silently selecting one.
     if source_normalized == canonical_normalized:
-        return 100, "exact canonical name"
+        return 95, "canonical name"
 
     if source_normalized in aliases:
         return 95, "known alias"
@@ -337,19 +304,9 @@ def _candidate_score(
     return 0, ""
 
 
-# ---------------------------------------------------------------------------
-# Candidate generation
-# ---------------------------------------------------------------------------
-
 def _build_candidates(
     dataframe: pd.DataFrame,
 ) -> Dict[str, List[MappingCandidate]]:
-    """
-    Build candidates for every canonical field against every source column.
-
-    All candidates are collected BEFORE any source column is consumed.
-    This is important because ambiguity must be detected first.
-    """
     candidates: Dict[str, List[MappingCandidate]] = {
         field: [] for field in CANONICAL_FIELDS
     }
@@ -383,19 +340,12 @@ def _build_candidates(
     return candidates
 
 
-# ---------------------------------------------------------------------------
-# Dynamic mapping
-# ---------------------------------------------------------------------------
-
 def map_columns(dataframe: pd.DataFrame) -> MappingResult:
     """
-    Dynamically map source columns to the canonical internal schema.
+    Dynamically map source columns to the canonical schema.
 
-    Rules:
-    - Never fabricate source data.
-    - Never silently choose between equally strong candidates.
-    - A source column is not reused for multiple canonical fields.
-    - Missing fields are explicitly reported.
+    The mapper never fabricates missing information and never silently
+    selects between equally strong candidates.
     """
     result = MappingResult()
 
@@ -409,10 +359,7 @@ def map_columns(dataframe: pd.DataFrame) -> MappingResult:
 
     candidates = _build_candidates(dataframe)
 
-    # -----------------------------------------------------------------------
-    # Step 1: Detect ambiguity BEFORE assigning mappings.
-    # -----------------------------------------------------------------------
-
+    # Detect ambiguity BEFORE assigning source columns.
     for canonical_field, field_candidates in candidates.items():
         if not field_candidates:
             continue
@@ -431,10 +378,7 @@ def map_columns(dataframe: pd.DataFrame) -> MappingResult:
                 for candidate in best_candidates
             ]
 
-    # -----------------------------------------------------------------------
-    # Step 2: Assign only unambiguous fields.
-    # -----------------------------------------------------------------------
-
+    # Assign only fields that are not ambiguous.
     used_source_columns: set[str] = set()
 
     for canonical_field in CANONICAL_FIELDS:
@@ -443,13 +387,11 @@ def map_columns(dataframe: pd.DataFrame) -> MappingResult:
         if not field_candidates:
             continue
 
-        # Never automatically select an ambiguous mapping.
         if canonical_field in result.ambiguous:
             continue
 
         selected: Optional[MappingCandidate] = None
 
-        # Find the highest-ranked candidate that has not already been used.
         for candidate in field_candidates:
             if candidate.source_column not in used_source_columns:
                 selected = candidate
@@ -465,10 +407,6 @@ def map_columns(dataframe: pd.DataFrame) -> MappingResult:
         result.mappings[canonical_field] = selected.source_column
         used_source_columns.add(selected.source_column)
 
-    # -----------------------------------------------------------------------
-    # Step 3: Identify unmapped source columns.
-    # -----------------------------------------------------------------------
-
     mapped_source_columns = set(result.mappings.values())
 
     result.unmapped_source_columns = [
@@ -476,10 +414,6 @@ def map_columns(dataframe: pd.DataFrame) -> MappingResult:
         for column in dataframe.columns
         if str(column) not in mapped_source_columns
     ]
-
-    # -----------------------------------------------------------------------
-    # Step 4: Report missing required canonical fields.
-    # -----------------------------------------------------------------------
 
     result.missing_fields = [
         field
@@ -496,28 +430,18 @@ def map_columns(dataframe: pd.DataFrame) -> MappingResult:
     return result
 
 
-# ---------------------------------------------------------------------------
-# Canonical normalization
-# ---------------------------------------------------------------------------
-
 def normalize_canonical_dataframe(
     dataframe: pd.DataFrame,
     mappings: Dict[str, str],
 ) -> Tuple[pd.DataFrame, List[str]]:
     """
-    Create a canonical dataframe using confirmed source mappings.
+    Normalize a source dataframe into the canonical internal schema.
 
-    Missing fields are represented by pd.NA.
-
-    Missing numeric values are NOT converted to zero because zero would
-    constitute fabricated business data.
+    Unmapped fields remain pd.NA. No missing business values are
+    fabricated as zero.
     """
     canonical = pd.DataFrame(index=dataframe.index)
     warnings: List[str] = []
-
-    # -----------------------------------------------------------------------
-    # Copy mapped source fields into canonical fields.
-    # -----------------------------------------------------------------------
 
     for field in CANONICAL_FIELDS:
         source_column = mappings.get(field)
@@ -536,10 +460,6 @@ def normalize_canonical_dataframe(
 
         canonical[field] = dataframe[source_column]
 
-    # -----------------------------------------------------------------------
-    # Date normalization.
-    # -----------------------------------------------------------------------
-
     if "date" in canonical.columns:
         converted_date, date_warnings = safe_datetime(
             canonical["date"]
@@ -553,10 +473,6 @@ def normalize_canonical_dataframe(
                 for message in _normalization_warnings(date_warnings)
             ]
         )
-
-    # -----------------------------------------------------------------------
-    # Numeric normalization.
-    # -----------------------------------------------------------------------
 
     for field in NUMERIC_CANONICAL_FIELDS:
         if field not in canonical.columns:
@@ -575,10 +491,6 @@ def normalize_canonical_dataframe(
             ]
         )
 
-    # -----------------------------------------------------------------------
-    # String normalization.
-    # -----------------------------------------------------------------------
-
     for field in STRING_CANONICAL_FIELDS:
         if field in canonical.columns:
             canonical[field] = clean_string_series(
@@ -588,24 +500,18 @@ def normalize_canonical_dataframe(
     return canonical, warnings
 
 
-# ---------------------------------------------------------------------------
-# Complete mapping workflow
-# ---------------------------------------------------------------------------
-
 def create_mapping_result(
     dataframe: pd.DataFrame,
 ) -> MappingResult:
     """
-    Run dynamic mapping and, when possible, create the normalized
-    canonical dataframe.
+    Run dynamic mapping and normalize the dataframe when mappings
+    are sufficiently certain.
     """
     result = map_columns(dataframe)
 
     if result.errors:
         return result
 
-    # Ambiguous mappings require user confirmation.
-    # Do not normalize using uncertain mappings.
     if result.ambiguous:
         result.warnings.append(
             "Ambiguous column mappings require user confirmation "
@@ -626,9 +532,6 @@ def create_mapping_result(
         conversion_warnings
     )
 
-    # Conversion warnings are also surfaced in the main warnings list
-    # because the Streamlit UI and tests use result.warnings as the
-    # user-facing warning collection.
     result.warnings.extend(
         conversion_warnings
     )
@@ -636,15 +539,11 @@ def create_mapping_result(
     return result
 
 
-# ---------------------------------------------------------------------------
-# Human-readable mapping summary
-# ---------------------------------------------------------------------------
-
 def describe_mapping(
     result: MappingResult,
 ) -> str:
     """
-    Produce a human-readable summary suitable for the Streamlit UI.
+    Produce a human-readable mapping summary for the Streamlit UI.
     """
     lines: List[str] = []
 
