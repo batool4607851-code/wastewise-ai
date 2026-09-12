@@ -91,6 +91,7 @@ FIELD_ALIASES: dict[str, list[str]] = {
     "production_quantity": [
         "production_quantity",
         "production_qty",
+        "prod_qty",
         "produced_quantity",
         "produced_qty",
         "output_quantity",
@@ -234,10 +235,12 @@ class MappingResult:
 
 
 def _normalise_aliases(canonical_field: str) -> set[str]:
-    aliases = FIELD_ALIASES.get(canonical_field, [])
     return {
         normalize_column_name(alias)
-        for alias in aliases
+        for alias in FIELD_ALIASES.get(
+            canonical_field,
+            [],
+        )
     }
 
 
@@ -246,14 +249,13 @@ def _score_column_match(
     normalized_source: str,
     canonical_field: str,
 ) -> float:
-    """
-    Score how strongly a source column matches a canonical field.
+    canonical_normalized = normalize_column_name(
+        canonical_field
+    )
 
-    Exact canonical/alias matches receive the highest score.
-    Substring matches receive lower scores and are used only as fallback.
-    """
-    canonical_normalized = normalize_column_name(canonical_field)
-    aliases = _normalise_aliases(canonical_field)
+    aliases = _normalise_aliases(
+        canonical_field
+    )
 
     if normalized_source == canonical_normalized:
         return 100.0
@@ -261,16 +263,27 @@ def _score_column_match(
     if normalized_source in aliases:
         return 95.0
 
-    source_tokens = set(normalized_source.split("_"))
-    canonical_tokens = set(canonical_normalized.split("_"))
+    source_tokens = set(
+        normalized_source.split("_")
+    )
 
-    if canonical_tokens and canonical_tokens.issubset(source_tokens):
+    canonical_tokens = set(
+        canonical_normalized.split("_")
+    )
+
+    if (
+        canonical_tokens
+        and canonical_tokens.issubset(source_tokens)
+    ):
         return 80.0
 
     for alias in aliases:
         alias_tokens = set(alias.split("_"))
 
-        if alias_tokens and alias_tokens.issubset(source_tokens):
+        if (
+            alias_tokens
+            and alias_tokens.issubset(source_tokens)
+        ):
             return 70.0
 
     if canonical_normalized in normalized_source:
@@ -283,16 +296,19 @@ def _score_column_match(
     return 0.0
 
 
-def map_columns(dataframe: pd.DataFrame) -> MappingResult:
+def map_columns(
+    dataframe: pd.DataFrame,
+) -> MappingResult:
     """
     Dynamically map source columns to the canonical schema.
 
-    The mapper deliberately avoids silently fabricating values.
-    If multiple source columns are equally strong candidates for a
-    canonical field, the field is marked ambiguous and requires
-    confirmation instead of being guessed.
+    If multiple source columns are equally strong candidates
+    for the same canonical field, the field is marked ambiguous.
+    The mapper never silently guesses between equivalent columns.
     """
-    source_columns = list(dataframe.columns)
+    source_columns = list(
+        dataframe.columns
+    )
 
     normalized_sources = {
         column: normalize_column_name(column)
@@ -302,16 +318,20 @@ def map_columns(dataframe: pd.DataFrame) -> MappingResult:
     mappings: dict[str, str] = {}
     ambiguous: dict[str, list[str]] = {}
     warnings: list[str] = []
+
     used_source_columns: set[str] = set()
 
     for canonical_field in CANONICAL_FIELDS:
+
         candidates: list[tuple[str, float]] = []
 
         for source_column in source_columns:
             if source_column in used_source_columns:
                 continue
 
-            normalized_source = normalized_sources[source_column]
+            normalized_source = (
+                normalized_sources[source_column]
+            )
 
             score = _score_column_match(
                 source_column,
@@ -341,7 +361,9 @@ def map_columns(dataframe: pd.DataFrame) -> MappingResult:
         ]
 
         if len(best_candidates) > 1:
-            ambiguous[canonical_field] = best_candidates
+            ambiguous[canonical_field] = (
+                best_candidates
+            )
 
             warnings.append(
                 f"Ambiguous mapping for "
@@ -354,8 +376,13 @@ def map_columns(dataframe: pd.DataFrame) -> MappingResult:
 
         selected_column = best_candidates[0]
 
-        mappings[canonical_field] = selected_column
-        used_source_columns.add(selected_column)
+        mappings[canonical_field] = (
+            selected_column
+        )
+
+        used_source_columns.add(
+            selected_column
+        )
 
     unmapped_source_columns = [
         column
@@ -378,10 +405,44 @@ def map_columns(dataframe: pd.DataFrame) -> MappingResult:
     return MappingResult(
         mappings=mappings,
         ambiguous=ambiguous,
-        unmapped_source_columns=unmapped_source_columns,
+        unmapped_source_columns=(
+            unmapped_source_columns
+        ),
         missing_fields=missing_fields,
         warnings=warnings,
     )
+
+
+def _normalization_warnings(
+    value: Any,
+    field_name: str,
+) -> list[str]:
+    """
+    Convert warning metadata returned by utility
+    functions into the MappingResult warning format.
+
+    The current utility functions return a warning
+    count rather than a list of warning strings.
+    """
+    if value is None:
+        return []
+
+    if isinstance(value, (int, float)):
+        if value > 0:
+            return [
+                f"{int(value)} value(s) could not be "
+                f"normalized for '{field_name}'."
+            ]
+
+        return []
+
+    if isinstance(value, str):
+        return [value]
+
+    try:
+        return list(value)
+    except TypeError:
+        return []
 
 
 def normalize_canonical_dataframe(
@@ -401,7 +462,9 @@ def normalize_canonical_dataframe(
     )
 
     for field_name in CANONICAL_FIELDS:
-        source_column = mappings.get(field_name)
+        source_column = mappings.get(
+            field_name
+        )
 
         if source_column is None:
             canonical[field_name] = pd.NA
@@ -411,31 +474,53 @@ def normalize_canonical_dataframe(
             canonical[field_name] = pd.NA
 
             warnings.append(
-                f"Mapped source column '{source_column}' "
-                f"for '{field_name}' is no longer available."
+                f"Mapped source column "
+                f"'{source_column}' for "
+                f"'{field_name}' is no longer "
+                "available."
             )
 
             continue
 
-        series = dataframe[source_column]
+        series = dataframe[
+            source_column
+        ]
 
         if field_name == "date":
-            normalized, date_warnings = safe_datetime(series)
+            normalized, warning_info = (
+                safe_datetime(series)
+            )
 
-            canonical[field_name] = normalized
+            canonical[field_name] = (
+                normalized
+            )
 
-            warnings.extend(date_warnings)
+            warnings.extend(
+                _normalization_warnings(
+                    warning_info,
+                    field_name,
+                )
+            )
 
         elif field_name in NUMERIC_FIELDS:
-            normalized, numeric_warnings = safe_numeric(series)
+            normalized, warning_info = (
+                safe_numeric(series)
+            )
 
-            canonical[field_name] = normalized
+            canonical[field_name] = (
+                normalized
+            )
 
-            warnings.extend(numeric_warnings)
+            warnings.extend(
+                _normalization_warnings(
+                    warning_info,
+                    field_name,
+                )
+            )
 
         elif field_name in STRING_FIELDS:
-            canonical[field_name] = clean_string_series(
-                series
+            canonical[field_name] = (
+                clean_string_series(series)
             )
 
         else:
@@ -450,10 +535,12 @@ def create_mapping_result(
     """
     Map source columns and normalize the dataframe.
 
-    Normalization occurs only for fields with an unambiguous mapping.
-    Ambiguous fields remain unavailable until confirmed.
+    Normalization occurs only for fields with an
+    unambiguous mapping.
     """
-    result = map_columns(dataframe)
+    result = map_columns(
+        dataframe
+    )
 
     if result.errors:
         return result
@@ -465,10 +552,17 @@ def create_mapping_result(
         )
     )
 
-    result.canonical_dataframe = canonical_dataframe
-    result.conversion_warnings = conversion_warnings
+    result.canonical_dataframe = (
+        canonical_dataframe
+    )
 
-    result.warnings.extend(conversion_warnings)
+    result.conversion_warnings = (
+        conversion_warnings
+    )
+
+    result.warnings.extend(
+        conversion_warnings
+    )
 
     return result
 
@@ -482,7 +576,9 @@ def describe_mapping(
     return {
         "mappings": result.mappings,
         "ambiguous": result.ambiguous,
-        "missing_fields": result.missing_fields,
+        "missing_fields": (
+            result.missing_fields
+        ),
         "unmapped_source_columns": (
             result.unmapped_source_columns
         ),
