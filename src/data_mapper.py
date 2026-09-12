@@ -365,119 +365,88 @@ def generate_candidates(
     return candidates
 
 
-def map_columns(
-    dataframe: pd.DataFrame,
-) -> MappingResult:
-    """
-    Dynamically map source dataframe columns to canonical fields.
-
-    Ambiguous fields are not automatically assigned.
-    """
-    columns = [
-        str(column)
-        for column in dataframe.columns
-    ]
-
-    candidates = generate_candidates(
-        columns
-    )
-
-    grouped: dict[str, list[MappingCandidate]] = {
-        field: []
-        for field in CANONICAL_FIELDS
+def map_columns(dataframe: pd.DataFrame) -> MappingResult:
+    """Map source columns to the canonical schema without silently reusing columns."""
+    source_columns = list(dataframe.columns)
+    normalized_sources = {
+        column: normalize_column_name(column)
+        for column in source_columns
     }
-
-    for candidate in candidates:
-        grouped[
-            candidate.canonical_field
-        ].append(candidate)
 
     mappings: dict[str, str] = {}
     ambiguous: dict[str, list[str]] = {}
+    unmapped_source_columns: list[str] = []
+    warnings: list[str] = []
+
     used_source_columns: set[str] = set()
 
     for canonical_field in CANONICAL_FIELDS:
-        field_candidates = sorted(
-            grouped[canonical_field],
-            key=lambda item: (
-                item.score,
-                item.match_type == "EXACT",
-            ),
-            reverse=True,
-        )
+        candidates: list[tuple[str, float]] = []
 
-        if not field_candidates:
+        for source_column in source_columns:
+            if source_column in used_source_columns:
+                continue
+
+            normalized = normalized_sources[source_column]
+            score = _score_column_match(
+                source_column,
+                normalized,
+                canonical_field,
+            )
+
+            if score > 0:
+                candidates.append((source_column, score))
+
+        if not candidates:
             continue
 
-        best_score = field_candidates[0].score
-
-        best = [
-            candidate
-            for candidate in field_candidates
-            if candidate.score == best_score
+        candidates.sort(key=lambda item: item[1], reverse=True)
+        best_score = candidates[0][1]
+        best_candidates = [
+            column
+            for column, score in candidates
+            if score == best_score
         ]
 
-        if len(best) == 1:
-            source = best[0].source_column
+        if len(best_candidates) > 1:
+            ambiguous[canonical_field] = best_candidates
+            warnings.append(
+                f"Ambiguous mapping for '{canonical_field}': "
+                f"{', '.join(best_candidates)}. Confirmation is required."
+            )
+            continue
 
-            if source not in used_source_columns:
-                mappings[canonical_field] = source
-                used_source_columns.add(source)
-            else:
-                ambiguous[canonical_field] = [
-                    candidate.source_column
-                    for candidate in best
-                ]
-
-        else:
-            # Do not silently guess between equally strong candidates.
-            ambiguous[canonical_field] = [
-                candidate.source_column
-                for candidate in best
-            ]
-
-    missing_fields = [
-        field
-        for field in REQUIRED_FIELDS
-        if field not in mappings
-    ]
-
-    mapped_sources = set(
-        mappings.values()
-    )
+        selected_column = best_candidates[0]
+        mappings[canonical_field] = selected_column
+        used_source_columns.add(selected_column)
 
     unmapped_source_columns = [
         column
-        for column in columns
-        if column not in mapped_sources
+        for column in source_columns
+        if column not in used_source_columns
     ]
 
-    warnings: list[str] = []
+    missing_fields = [
+        field
+        for field in REQUIRED_CANONICAL_FIELDS
+        if field not in mappings
+    ]
 
-    for field, candidates_for_field in ambiguous.items():
+    if missing_fields:
         warnings.append(
-            f"Ambiguous mapping for '{field}': "
-            + ", ".join(candidates_for_field)
-            + ". User confirmation is required."
-        )
-
-    for field in missing_fields:
-        warnings.append(
-            f"Required field '{field}' could not be mapped. "
-            "WasteWise AI will not fabricate this field."
+            "Missing required canonical fields: "
+            + ", ".join(missing_fields)
         )
 
     return MappingResult(
-        canonical_dataframe=None,
         mappings=mappings,
         ambiguous=ambiguous,
         unmapped_source_columns=unmapped_source_columns,
         missing_fields=missing_fields,
         warnings=warnings,
     )
-
-
-def normalize_canonical_dataframe(
+    
+    def normalize_canonical_dataframe(
     dataframe: pd.DataFrame,
     mappings: dict[str, str],
 ) -> tuple[pd.DataFrame, list[str]]:
