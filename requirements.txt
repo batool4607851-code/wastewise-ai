@@ -1,0 +1,15 @@
+streamlit
+pandas
+numpy
+openpyxl
+xlrd
+plotly
+pypdf
+faiss-cpu
+sentence-transformers
+pydantic
+python-dotenv
+requests
+openai
+xai-sdk
+pytest
