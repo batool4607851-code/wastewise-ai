@@ -1,25 +1,13 @@
-"""
-WasteWise AI dynamic data mapping and normalization.
-
-The mapper converts factory-specific source column names into the
-WasteWise canonical schema.
-
-Important:
-    - It does not assume a specific factory.
-    - It does not silently fabricate missing fields.
-    - Ambiguous mappings are explicitly reported.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 import pandas as pd
 
 from .utils import (
     clean_string_series,
     normalize_column_name,
-    normalize_text,
     safe_datetime,
     safe_numeric,
 )
@@ -49,172 +37,159 @@ CANONICAL_FIELDS = [
 ]
 
 
-REQUIRED_FIELDS = [
+REQUIRED_CANONICAL_FIELDS = [
     "date",
     "product",
+    "batch",
+    "production_line",
+    "shift",
     "production_quantity",
+    "event_type",
+    "event_reason",
+    "affected_quantity",
+    "unit_cost",
 ]
 
 
-FIELD_ALIASES = {
+FIELD_ALIASES: dict[str, list[str]] = {
     "date": [
         "date",
-        "production date",
-        "prod date",
-        "event date",
-        "record date",
-        "transaction date",
+        "datetime",
+        "timestamp",
+        "event_date",
+        "production_date",
+        "record_date",
     ],
     "product": [
         "product",
-        "product name",
-        "product code",
+        "product_name",
         "sku",
         "item",
-        "item name",
+        "item_name",
     ],
     "batch": [
         "batch",
-        "batch id",
-        "batch number",
-        "batch no",
+        "batch_id",
+        "batch_number",
         "lot",
-        "lot number",
+        "lot_number",
+        "production_batch",
     ],
     "production_line": [
-        "production line",
         "production_line",
+        "productionline",
         "line",
-        "line id",
-        "line name",
-        "prod line",
-        "production unit",
+        "line_name",
+        "line_id",
+        "machine_line",
     ],
     "shift": [
         "shift",
-        "shift name",
-        "work shift",
-        "production shift",
+        "shift_name",
+        "work_shift",
     ],
     "production_quantity": [
-        "production quantity",
-        "production qty",
-        "prod quantity",
-        "prod qty",
-        "production volume",
-        "production output",
-        "output quantity",
-        "output qty",
-        "produced quantity",
-        "produced qty",
+        "production_quantity",
+        "production_qty",
+        "produced_quantity",
+        "produced_qty",
+        "output_quantity",
+        "output_qty",
+        "production_volume",
     ],
     "event_type": [
-        "event type",
         "event_type",
-        "loss type",
-        "waste type",
-        "incident type",
-        "record type",
+        "event",
+        "event_category",
+        "loss_type",
+        "activity_type",
+        "record_type",
     ],
     "event_reason": [
-        "event reason",
+        "event_reason",
         "reason",
-        "waste reason",
-        "loss reason",
+        "waste_reason",
+        "loss_reason",
         "cause",
-        "loss cause",
-        "waste cause",
-        "reason description",
+        "reason_code",
+        "waste_cause",
     ],
     "affected_quantity": [
-        "affected quantity",
-        "affected qty",
-        "affected volume",
-        "quantity affected",
+        "affected_quantity",
+        "affected_qty",
+        "waste_quantity",
+        "waste_qty",
+        "quantity_affected",
+        "quantity",
     ],
     "loss_quantity": [
-        "loss quantity",
-        "loss qty",
-        "waste quantity",
-        "waste qty",
-        "waste",
-        "scrap quantity",
-        "scrap qty",
-        "material loss",
-        "loss volume",
+        "loss_quantity",
+        "loss_qty",
+        "material_loss",
+        "material_loss_quantity",
+        "waste_loss",
     ],
     "rework_quantity": [
-        "rework quantity",
-        "rework qty",
-        "rework volume",
-        "quantity reworked",
+        "rework_quantity",
+        "rework_qty",
+        "quantity_reworked",
+        "rework_volume",
     ],
     "recovered_quantity": [
-        "recovered quantity",
-        "recovered qty",
-        "recovery quantity",
-        "recovery qty",
-        "recovered volume",
+        "recovered_quantity",
+        "recovered_qty",
+        "recovery_quantity",
+        "recovery_qty",
+        "quantity_recovered",
     ],
     "final_loss_quantity": [
-        "final loss quantity",
-        "final loss qty",
-        "final waste quantity",
-        "final waste qty",
-        "net loss quantity",
-        "disposal quantity",
-        "disposed quantity",
+        "final_loss_quantity",
+        "final_loss_qty",
+        "final_loss",
+        "net_loss_quantity",
+        "actual_loss_quantity",
     ],
     "disposition": [
         "disposition",
-        "disposition status",
-        "material disposition",
+        "final_disposition",
+        "material_disposition",
         "outcome",
-        "status",
     ],
     "unit_cost": [
-        "unit cost",
-        "cost per unit",
-        "unit price",
-        "material unit cost",
-        "cost unit",
+        "unit_cost",
+        "cost_per_unit",
+        "unit_price",
+        "cost_unit",
     ],
     "rework_cost": [
-        "rework cost",
-        "cost of rework",
-        "rework expense",
+        "rework_cost",
+        "cost_of_rework",
+        "rework_expense",
     ],
     "loss_cost": [
-        "loss cost",
-        "waste cost",
-        "scrap cost",
-        "cost of loss",
-        "disposal cost",
+        "loss_cost",
+        "waste_cost",
+        "cost_of_loss",
+        "loss_expense",
     ],
     "quality_parameter": [
-        "quality parameter",
-        "quality metric",
-        "test parameter",
+        "quality_parameter",
+        "quality_metric",
         "parameter",
-        "qc parameter",
-        "quality test",
+        "quality_measure",
     ],
     "quality_value": [
-        "quality value",
-        "test value",
-        "measurement",
-        "measured value",
-        "qc value",
-        "result value",
+        "quality_value",
+        "quality_measurement",
+        "measured_value",
+        "parameter_value",
     ],
     "quality_status": [
-        "quality status",
-        "qc status",
-        "quality result",
-        "qc result",
-        "conformance",
-        "conformance status",
-        "spec status",
+        "quality_status",
+        "quality_result",
+        "qc_status",
+        "inspection_status",
+        "status",
     ],
 }
 
@@ -247,20 +222,8 @@ STRING_FIELDS = {
 
 
 @dataclass
-class MappingCandidate:
-    """A possible source-to-canonical mapping."""
-
-    source_column: str
-    canonical_field: str
-    match_type: str
-    score: float
-
-
-@dataclass
 class MappingResult:
-    """Structured result of the dynamic mapping process."""
-
-    canonical_dataframe: pd.DataFrame | None
+    canonical_dataframe: pd.DataFrame | None = None
     mappings: dict[str, str] = field(default_factory=dict)
     ambiguous: dict[str, list[str]] = field(default_factory=dict)
     unmapped_source_columns: list[str] = field(default_factory=list)
@@ -270,104 +233,67 @@ class MappingResult:
     conversion_warnings: list[str] = field(default_factory=list)
 
 
-def _normalized_aliases(canonical_field: str) -> set[str]:
-    """Return normalized aliases for a canonical field."""
-    aliases = FIELD_ALIASES.get(
-        canonical_field,
-        [],
-    )
-
+def _normalise_aliases(canonical_field: str) -> set[str]:
+    aliases = FIELD_ALIASES.get(canonical_field, [])
     return {
         normalize_column_name(alias)
         for alias in aliases
     }
 
 
-def _candidate_score(
+def _score_column_match(
     source_column: str,
+    normalized_source: str,
     canonical_field: str,
-) -> tuple[str, float]:
+) -> float:
     """
-    Determine how strongly a source column matches a canonical field.
+    Score how strongly a source column matches a canonical field.
 
-    Matching order:
-        exact canonical name
-        exact alias
-        token/substring relationship
-        no match
+    Exact canonical/alias matches receive the highest score.
+    Substring matches receive lower scores and are used only as fallback.
     """
-    normalized_source = normalize_column_name(
-        source_column
-    )
+    canonical_normalized = normalize_column_name(canonical_field)
+    aliases = _normalise_aliases(canonical_field)
 
-    normalized_canonical = normalize_column_name(
-        canonical_field
-    )
-
-    aliases = _normalized_aliases(
-        canonical_field
-    )
-
-    if normalized_source == normalized_canonical:
-        return "EXACT", 1.00
+    if normalized_source == canonical_normalized:
+        return 100.0
 
     if normalized_source in aliases:
-        return "ALIAS", 0.95
+        return 95.0
 
-    source_tokens = set(
-        normalized_source.split("_")
-    )
+    source_tokens = set(normalized_source.split("_"))
+    canonical_tokens = set(canonical_normalized.split("_"))
+
+    if canonical_tokens and canonical_tokens.issubset(source_tokens):
+        return 80.0
 
     for alias in aliases:
-        alias_tokens = set(
-            alias.split("_")
-        )
+        alias_tokens = set(alias.split("_"))
 
-        if not alias_tokens:
-            continue
+        if alias_tokens and alias_tokens.issubset(source_tokens):
+            return 70.0
 
-        overlap = len(
-            source_tokens & alias_tokens
-        ) / max(
-            len(alias_tokens),
-            1,
-        )
+    if canonical_normalized in normalized_source:
+        return 50.0
 
-        if overlap >= 0.75:
-            return "TOKEN", 0.80
+    for alias in aliases:
+        if alias and alias in normalized_source:
+            return 40.0
 
-    return "NONE", 0.0
-
-
-def generate_candidates(
-    columns: list[str],
-) -> list[MappingCandidate]:
-    """Generate all meaningful source-column mapping candidates."""
-    candidates: list[MappingCandidate] = []
-
-    for source_column in columns:
-        for canonical_field in CANONICAL_FIELDS:
-            match_type, score = _candidate_score(
-                source_column,
-                canonical_field,
-            )
-
-            if score > 0:
-                candidates.append(
-                    MappingCandidate(
-                        source_column=source_column,
-                        canonical_field=canonical_field,
-                        match_type=match_type,
-                        score=score,
-                    )
-                )
-
-    return candidates
+    return 0.0
 
 
 def map_columns(dataframe: pd.DataFrame) -> MappingResult:
-    """Map source columns to the canonical schema without silently reusing columns."""
+    """
+    Dynamically map source columns to the canonical schema.
+
+    The mapper deliberately avoids silently fabricating values.
+    If multiple source columns are equally strong candidates for a
+    canonical field, the field is marked ambiguous and requires
+    confirmation instead of being guessed.
+    """
     source_columns = list(dataframe.columns)
+
     normalized_sources = {
         column: normalize_column_name(column)
         for column in source_columns
@@ -375,9 +301,7 @@ def map_columns(dataframe: pd.DataFrame) -> MappingResult:
 
     mappings: dict[str, str] = {}
     ambiguous: dict[str, list[str]] = {}
-    unmapped_source_columns: list[str] = []
     warnings: list[str] = []
-
     used_source_columns: set[str] = set()
 
     for canonical_field in CANONICAL_FIELDS:
@@ -387,21 +311,29 @@ def map_columns(dataframe: pd.DataFrame) -> MappingResult:
             if source_column in used_source_columns:
                 continue
 
-            normalized = normalized_sources[source_column]
+            normalized_source = normalized_sources[source_column]
+
             score = _score_column_match(
                 source_column,
-                normalized,
+                normalized_source,
                 canonical_field,
             )
 
             if score > 0:
-                candidates.append((source_column, score))
+                candidates.append(
+                    (source_column, score)
+                )
 
         if not candidates:
             continue
 
-        candidates.sort(key=lambda item: item[1], reverse=True)
+        candidates.sort(
+            key=lambda item: item[1],
+            reverse=True,
+        )
+
         best_score = candidates[0][1]
+
         best_candidates = [
             column
             for column, score in candidates
@@ -410,13 +342,18 @@ def map_columns(dataframe: pd.DataFrame) -> MappingResult:
 
         if len(best_candidates) > 1:
             ambiguous[canonical_field] = best_candidates
+
             warnings.append(
-                f"Ambiguous mapping for '{canonical_field}': "
-                f"{', '.join(best_candidates)}. Confirmation is required."
+                f"Ambiguous mapping for "
+                f"'{canonical_field}': "
+                f"{', '.join(best_candidates)}. "
+                "Confirmation is required."
             )
+
             continue
 
         selected_column = best_candidates[0]
+
         mappings[canonical_field] = selected_column
         used_source_columns.add(selected_column)
 
@@ -427,9 +364,9 @@ def map_columns(dataframe: pd.DataFrame) -> MappingResult:
     ]
 
     missing_fields = [
-        field
-        for field in REQUIRED_CANONICAL_FIELDS
-        if field not in mappings
+        field_name
+        for field_name in REQUIRED_CANONICAL_FIELDS
+        if field_name not in mappings
     ]
 
     if missing_fields:
@@ -445,13 +382,14 @@ def map_columns(dataframe: pd.DataFrame) -> MappingResult:
         missing_fields=missing_fields,
         warnings=warnings,
     )
-    
-    def normalize_canonical_dataframe(
+
+
+def normalize_canonical_dataframe(
     dataframe: pd.DataFrame,
     mappings: dict[str, str],
 ) -> tuple[pd.DataFrame, list[str]]:
     """
-    Create a canonical dataframe using the confirmed mappings.
+    Create a canonical dataframe using confirmed mappings.
 
     Missing canonical fields are left as pd.NA.
     They are never replaced with zero.
@@ -462,58 +400,46 @@ def map_columns(dataframe: pd.DataFrame) -> MappingResult:
         index=dataframe.index
     )
 
-    for field in CANONICAL_FIELDS:
-        source_column = mappings.get(field)
+    for field_name in CANONICAL_FIELDS:
+        source_column = mappings.get(field_name)
 
         if source_column is None:
-            canonical[field] = pd.NA
+            canonical[field_name] = pd.NA
             continue
 
         if source_column not in dataframe.columns:
-            canonical[field] = pd.NA
+            canonical[field_name] = pd.NA
+
             warnings.append(
-                f"Source column '{source_column}' "
-                f"for '{field}' was not found."
+                f"Mapped source column '{source_column}' "
+                f"for '{field_name}' is no longer available."
             )
+
             continue
 
-        canonical[field] = dataframe[
-            source_column
-        ]
+        series = dataframe[source_column]
 
-    if "date" in mappings:
-        converted, invalid_count = safe_datetime(
-            canonical["date"]
-        )
-        canonical["date"] = converted
+        if field_name == "date":
+            normalized, date_warnings = safe_datetime(series)
 
-        if invalid_count:
-            warnings.append(
-                f"{invalid_count} value(s) in 'date' "
-                "could not be converted to a valid date."
+            canonical[field_name] = normalized
+
+            warnings.extend(date_warnings)
+
+        elif field_name in NUMERIC_FIELDS:
+            normalized, numeric_warnings = safe_numeric(series)
+
+            canonical[field_name] = normalized
+
+            warnings.extend(numeric_warnings)
+
+        elif field_name in STRING_FIELDS:
+            canonical[field_name] = clean_string_series(
+                series
             )
 
-    for field in NUMERIC_FIELDS:
-        if field not in canonical.columns:
-            continue
-
-        converted, invalid_count = safe_numeric(
-            canonical[field]
-        )
-
-        canonical[field] = converted
-
-        if invalid_count:
-            warnings.append(
-                f"{invalid_count} value(s) in '{field}' "
-                "could not be converted to numeric values."
-            )
-
-    for field in STRING_FIELDS:
-        if field in canonical.columns:
-            canonical[field] = clean_string_series(
-                canonical[field]
-            )
+        else:
+            canonical[field_name] = series
 
     return canonical, warnings
 
@@ -522,42 +448,36 @@ def create_mapping_result(
     dataframe: pd.DataFrame,
 ) -> MappingResult:
     """
-    Run mapping and normalization in one operation.
+    Map source columns and normalize the dataframe.
 
-    This is the main public entry point for the mapping layer.
+    Normalization occurs only for fields with an unambiguous mapping.
+    Ambiguous fields remain unavailable until confirmed.
     """
-    mapping_result = map_columns(
-        dataframe
-    )
+    result = map_columns(dataframe)
 
-    # Do not normalize through unresolved ambiguous mappings.
-    confirmed_mappings = dict(
-        mapping_result.mappings
-    )
+    if result.errors:
+        return result
 
-    canonical, conversion_warnings = (
+    canonical_dataframe, conversion_warnings = (
         normalize_canonical_dataframe(
             dataframe,
-            confirmed_mappings,
+            result.mappings,
         )
     )
 
-    mapping_result.canonical_dataframe = canonical
-    mapping_result.conversion_warnings = (
-        conversion_warnings
-    )
-    mapping_result.warnings.extend(
-        conversion_warnings
-    )
+    result.canonical_dataframe = canonical_dataframe
+    result.conversion_warnings = conversion_warnings
 
-    return mapping_result
+    result.warnings.extend(conversion_warnings)
+
+    return result
 
 
 def describe_mapping(
     result: MappingResult,
-) -> dict[str, object]:
+) -> dict[str, Any]:
     """
-    Convert MappingResult into a UI-friendly dictionary.
+    Return a UI-friendly summary of a mapping result.
     """
     return {
         "mappings": result.mappings,
@@ -568,4 +488,7 @@ def describe_mapping(
         ),
         "warnings": result.warnings,
         "errors": result.errors,
+        "conversion_warnings": (
+            result.conversion_warnings
+        ),
     }
